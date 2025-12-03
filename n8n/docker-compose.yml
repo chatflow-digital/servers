@@ -1,0 +1,137 @@
+services:
+  postgres:
+    image: postgres:13-alpine
+    container_name: chatflow-postgres
+    restart: always
+    environment:
+      - POSTGRES_USER=${SERVICE_USER_POSTGRES}
+      - POSTGRES_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POSTGRES_DB=chatflow
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 20s
+      retries: 10
+    volumes:
+      - data-postgres:/var/lib/postgresql/data
+    networks:
+      - chatflow-network
+
+  pgbouncer:
+    image: edoburu/pgbouncer:v1.24.1-p1
+    container_name: chatflow-pgbouncer
+    restart: always
+    environment:
+      - DB_HOST=postgres
+      - DB_NAME=chatflow
+      - DB_USER=${SERVICE_USER_POSTGRES}
+      - DB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+      - POOL_MODE=transaction
+      - DEFAULT_POOL_SIZE=20
+      - LISTEN_PORT=6432
+      - AUTH_TYPE=scram-sha-256
+    ports:
+      - '1010:6432'
+    depends_on:
+      - postgres
+    networks:
+      - chatflow-network
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: chatflow-redis
+    restart: always
+    networks:
+      - chatflow-network
+
+  n8n-editor:
+    image: 'docker.n8n.io/n8nio/n8n:1.122.4'
+    container_name: chatflow-n8n-editor
+    restart: always
+    ports:
+      - '5678:5678'
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=pgbouncer
+      - DB_POSTGRESDB_PORT=6432
+      - DB_POSTGRESDB_DATABASE=chatflow
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_DISABLE_PRODUCTION_MAIN_PROCESS_EXECUTIONS=true
+      - N8N_EXPRESS_SET_PROXY_ADDRESSES=true
+      - N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS=true
+
+      - N8N_HOST=${N8N_DOMAIN}
+      - WEBHOOK_URL=http://${N8N_DOMAIN}/
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+    volumes:
+      - data-n8n:/home/node/.n8n
+    depends_on:
+      - pgbouncer
+      - redis
+    networks:
+      - chatflow-network
+
+  n8n-webhook:
+    image: 'docker.n8n.io/n8nio/n8n:1.122.4'
+    container_name: chatflow-n8n-webhook
+    restart: always
+    command: webhook
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=pgbouncer
+      - DB_POSTGRESDB_PORT=6432
+      - DB_POSTGRESDB_DATABASE=chatflow
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_DISABLE_PRODUCTION_MAIN_PROCESS_EXECUTIONS=true
+      - N8N_EXPRESS_SET_PROXY_ADDRESSES=true
+
+      - N8N_HOST=${N8N_DOMAIN}
+      - WEBHOOK_URL=http://${N8N_DOMAIN}/
+      - N8N_BLOCK_ENV_ACCESS_IN_NODE=true
+      - GENERIC_TIMEZONE=America/Sao_Paulo
+    depends_on:
+      - pgbouncer
+      - redis
+    networks:
+      - chatflow-network
+
+  n8n-worker:
+    image: 'docker.n8n.io/n8nio/n8n:1.122.4'
+    container_name: chatflow-n8n-worker
+    restart: always
+    command: worker --concurrency=2
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=pgbouncer
+      - DB_POSTGRESDB_PORT=6432
+      - DB_POSTGRESDB_DATABASE=chatflow
+      - DB_POSTGRESDB_USER=${SERVICE_USER_POSTGRES}
+      - DB_POSTGRESDB_PASSWORD=${SERVICE_PASSWORD_POSTGRES}
+
+      - N8N_ENCRYPTION_KEY=${N8N_ENCRYPTION_KEY}
+      - EXECUTIONS_MODE=queue
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_DISABLE_PRODUCTION_MAIN_PROCESS_EXECUTIONS=true
+    depends_on:
+      - pgbouncer
+      - redis
+    networks:
+      - chatflow-network
+
+volumes:
+  data-postgres:
+  data-n8n:
+
+networks:
+  chatflow-network:
+    driver: bridge
